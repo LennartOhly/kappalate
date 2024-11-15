@@ -14,6 +14,6 @@
 #   Test Package:              'Ctrl + Shift + T'
 
 kappalate <- function() {
-  print("Hello, world my friend!")
+  print("Hello, online world my friend!")
 }
 
