@@ -17,7 +17,3 @@ kappalate <- function() {
   print("Hello, world my friend!")
 }
 
-
-
-?lm()
-hello()
