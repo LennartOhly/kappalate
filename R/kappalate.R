@@ -1,6 +1,5 @@
 # Hello, world!
 
-
 kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL, which = NULL, subset = NULL) {
 
   # Ensure required packages are loaded
@@ -25,11 +24,11 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
 
   is_formula <- is.formula(given_formula)
   if (!is_formula) {
-    stop("The input must be a valid IV formula of the form: 'outcome ~ exogenous variables | endogenous variables | instrumental variables'. E.g.: 'y ~ x1 + x2 | t1 + t2 | z1 + z2'.")
+    stop("The input must be a valid IV formula of the form: 'outcome ~ exogenous variables | endogenous variable | instrumental variable'. E.g.: 'y ~ x1 + x2 | t | z'.")
   }
   length_correct <- all(length(Formula(given_formula))== c(1,3))
   if (!length_correct) {
-    stop("The input must be a valid IV formula of the form: 'outcome ~ exogenous variables | endogenous variables | instrumental variables'. E.g.: 'y ~ x1 + x2 | t1 + t2 | z1 + z2'.")
+    stop("The input must be a valid IV formula of the form: 'outcome ~ exogenous variables | endogenous variable | instrumental variable'. E.g.: 'y ~ x1 + x2 | t | z'.")
   }
 
   # We parse the given input arguments using the formula.tools and Formula packages.
@@ -38,7 +37,9 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
   xvarsips <- all.vars(rhs(formula(Formula(given_formula), rhs = 1)))
   tvar <- all.vars(rhs(formula(Formula(given_formula), rhs = 2)))
   zvar <- all.vars(rhs(formula(Formula(given_formula), rhs = 3)))
-
+  if (length(tvar)!= 1 || length(zvar)  != 1){
+    stop("Only one instrument z and one treatment variable t are allowed.")
+    }
   # We check if only a subset of the data should be used
   # First we assert what input constitutes a valid index vector
   is_valid_index <- function(index, data) {
@@ -163,7 +164,7 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
       function(theta){
         zhat <- X %*% theta
         pz <- plogis(zhat)
-        c(((Z - pz)/pz*(1-pz))%*%X)
+        c(((Z - pz)/(pz*(1-pz)))%*%X)
       }
     }
     # The moment estimation in geex is then done via m_estimate(). If convergence fails we continue with the logistic regression estimates.
@@ -194,98 +195,398 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
   kappaw <- 1 - (t_data * (1 - z_data)) / (1 - ips) - ((1 - t_data) * z_data) / ips
   num1hat <- kappa_1 * y_data
   num0hat <- kappa_0 * y_data
-
+  # and their sample means
   nums <- mean(numhat)
   kappa_1s <- mean(kappa_1)
   kappa_0s <- mean(kappa_0)
   kappas <- mean(kappaw)
   num1hats <- mean(num1hat)
   num0hats <- mean(num0hat)
-
-
-
-
-
-
-
-  print((kappa_0*(1-ips)+kappa_1*ips)[1:3])
-  print(kappaw[1:3])
-  } #Ends the function code
-
-
-
-
-
-
-
-
-
-
-
-### TESTING
-library(geex)
-
-SB1_estfun <- function(data){
-  X <- model.matrix(z ~ x1 + x2, data = data)
-  Z <- data[["z"]]
-  function(theta){
-  zhat <- X %*% theta
-  pz <- plogis(zhat)
-  c(((Z - pz)/pz*(1-pz))%*%X)
+  # The different LATE estimators a, a1, a0, a10 are then calculated as follows. See the paper for more details.
+  late_a <- nums/kappas
+  late_a1 <- nums/kappa_1s
+  late_a0 <- nums/kappa_0s
+  late_a10 <- num1hats/kappa_1s - num0hats/kappa_0s
+  list_lates_a <- c(late_a,late_a1,late_a0,late_a10)
+  # Next we regress y on a constant, for the cases where z==1, and z==0 individually. Then we do the same for t.
+  formula_y_t <- reformulate(termlabels = c("1"), response = yvar)
+  # First y(z==1).
+  model_y_t_z1 <- lm(formula_y_t, data = data[data[[zvar]]==1,], weights = (1/ips[which(data[[zvar]] == 1)]))
+  by1 <- coef(model_y_t_z1)
+  y1hat <- predict(model_y_t_z1)
+  # Then y(z==0).
+  model_y_t_z0 <- lm(formula_y_t, data = data[data[[zvar]]==0,], weights = (1/(1-ips[which(data[[zvar]] == 0)])))
+  by0 <- coef(model_y_t_z0)
+  y0hat <- predict(model_y_t_z0)
+  # t(z==1)
+  if (dmeanz1 == 1){
+    d1hat <- 1
+  } else if (dmeanz1 == 0){
+    d1hat <- 0
+  } else {
+    formula_t_z <- reformulate(termlabels = c("1"), response = tvar)
+    model_t_z1 <- lm(formula_t_z, data = data[data[[zvar]]==1,], weights = (1/ips[which(data[[zvar]] == 1)]))
+    bd1 <- coef(model_t_z1)
+    d1hat <- predict(model_t_z1)
   }
-}
+  # t(z==0)
+  if (dmeanz0 == 0){
+    d0hat <- 0
+  } else if (dmeanz0 == 1){
+    d0hat <- 1
+  } else {
+    formula_t_z <- reformulate(termlabels = c("1"), response = tvar)
+    model_t_z0 <- lm(formula_t_z, data = data[data[[zvar]]==0,], weights = (1/(1-ips[which(data[[zvar]] == 0)])))
+    bd0 <- coef(model_t_z0)
+    d0hat <- predict(model_t_z0)
+  }
+
+  denom1s <- mean(d1hat)
+  denom0s <- mean(d0hat)
+  num1s <- mean(y1hat)
+  num0s <- mean(y0hat)
+
+  num_norms <- num1s - num0s
+  denom_norms <- denom1s - denom0s
+  late_norm <- num_norms/denom_norms
 
 
-results <- m_estimate(
-  estFUN = SB1_estfun,
-  data   = df,
-  root_control = setup_root_control(FUN = rootSolve::multiroot, start = coefslog))
-print(coef(results))
-print(vcov(results))
+  # Moment conditions for first stage
+  if (zmodel == "logit"){
+    eqips <- expression((Z - pz)%*%X)
+  } else if (zmodel =="probit"){
+    eqips <- expression((((Z - pz)/(pz*(1-pz)))*pd)%*%X)
+  } else if (zmodel == "cbps"){
+    eqips <- expression(((Z - pz)/(pz*(1-pz)))%*%X)
+  }
+  # Other moments
+  # psi_delta
+  eq_delta <- expression((Z*Y)/pz - ((1-Z)*Y)/(1-pz) - deltap)
+  # psi_gamma
+  eq_gamma <- expression(1 - ((1-Z)*t)/(1-pz) - Z*(1-t)/pz - gammap)
+  # psi_gamma1
+  eq_gamma1 <- expression((Z*t)/pz - ((1-Z)*t)/(1-pz) - gamma1)
+  # psi_gamma0
+  eq_gamma0 <- expression((Z*(t-1))/pz - ((1-Z)*(t-1))/(1-pz) - gamma0)
+  # psi_delta1
+  eq_delta1 <- expression(t*((Z-pz)/(pz*(1-pz)))*Y - delta1)
+  # psi_delta0
+  eq_delta0 <- expression((1-t)*(((1-Z)-(1-pz))/(pz*(1-pz)))*Y - delta0)
+  # psi_mu1
+  eq_mu1 <- expression((Z*(Y-mu1))/pz)
+  # psi_mu0
+  eq_mu0 <- expression(((1-Z)*(Y-mu0))/(1-pz))
+  # psi_m1
+  eq_m1 <- expression((Z*(t-m1))/pz)
+  # psi_m0
+  eq_m0 <- expression(((1-Z)*(t-m0))/(1-pz))
+
+  # psi_taua
+  eq_tau_a <- expression (tau_a - deltap/gammap)
+  # psi_taua1
+  eq_tau_a1 <- expression (tau_a1 - deltap/gamma1)
+  # psi_taua0
+  eq_tau_a0 <- expression (tau_a0 - deltap/gamma0)
+  # psi_taua10
+  eq_tau_a10 <- expression(tau_a10 - (delta1/gamma1 - delta0/gamma0))
+
+  if (dmeanz0 != 0 & dmeanz0 != 1 & dmeanz1 != 0 & dmeanz1 != 1) {
+    eq_tau_norm <- expression(tau_norm - (mu1 - mu0)/(m1 - m0))
+  } else if (dmeanz0 == 0 & dmeanz1 != 0 & dmeanz1 != 1) {
+    eq_tau_norm <- expression(tau_norm - (mu1 - mu0)/(m1))
+  } else if (dmeanz0 != 0 & dmeanz0 != 1 & dmeanz1 == 1) {
+    eq_tau_norm <- expression(tau_norm - (mu1 - mu0)/(1 - m0))
+  } else if (dmeanz0 == 1 & dmeanz1 != 0 & dmeanz1 != 1) {
+    eq_tau_norm <- expression(tau_norm - (mu1 - mu0)/(m1 - 1))
+  } else if (dmeanz0 != 0 & dmeanz0 != 1 & dmeanz1 == 0) {
+    eq_tau_norm <- expression(tau_norm - (mu1 - mu0)/(-m0))
+  }
+
+  # M-Estimation of the LATE
+  # tau_a
+  if (bintreat == 1){
+  if (which == "all"){
+  tau_a_condition <- function(data){
+    X <- model.matrix(formula_z, data = data)
+    Z <- data[[zvar]]
+    Y <- data[[yvar]]
+    t <- data[[tvar]]
+    function(theta){
+      zhat <- X %*% theta[1:ncol(X)]
+      deltap <- theta[ncol(X)+1]
+      gammap <- theta[ncol(X)+2]
+      tau_a <- theta[ncol(X)+3]
+      pz <- plogis(zhat)
+      if (zmodel == "probit"){
+        pz <- pnorm(zhat)}
+      pd <- dnorm(zhat)
+      c(eval(eqips), eval(eq_delta), eval(eq_gamma), eval(eq_tau_a))
+    }
+  }
+  tau_a_estimation <- m_estimate(
+    estFUN = tau_a_condition,
+    data   = data,
+    root_control = setup_root_control(start = c(bips,nums,kappas,late_a)))
+
+  coef_tau_a <- coef(tau_a_estimation)
+  tau_a <- coef_tau_a[length(coef_tau_a)]
+  vcov_tau_a <- vcov(tau_a_estimation)
+  var_tau_a <- vcov_tau_a[nrow(vcov_tau_a),ncol(vcov_tau_a)]
+
+  # tau_a1
+  tau_a1_condition <- function(data){
+    X <- model.matrix(formula_z, data = data)
+    Z <- data[[zvar]]
+    Y <- data[[yvar]]
+    t <- data[[tvar]]
+    function(theta){
+      zhat <- X %*% theta[1:ncol(X)]
+      deltap <- theta[ncol(X)+1]
+      gamma1 <- theta[ncol(X)+2]
+      tau_a1 <- theta[ncol(X)+3]
+      pz <- plogis(zhat)
+      if (zmodel == "probit"){
+        pz <- pnorm(zhat)}
+      pd <- dnorm(zhat)
+      c(eval(eqips), eval(eq_delta), eval(eq_gamma1), eval(eq_tau_a1))
+    }
+  }
+  tau_a1_estimation <- m_estimate(
+    estFUN = tau_a1_condition,
+    data   = data,
+    root_control = setup_root_control(start = c(bips,nums,kappa_1s,late_a1)))
+
+  coef_tau_a1 <- coef(tau_a1_estimation)
+  tau_a1 <- coef_tau_a1[length(coef_tau_a1)]
+  vcov_tau_a1 <- vcov(tau_a1_estimation)
+  var_tau_a1 <- vcov_tau_a1[nrow(vcov_tau_a1),ncol(vcov_tau_a1)]
+
+  # tau_a0
+  tau_a0_condition <- function(data){
+    X <- model.matrix(formula_z, data = data)
+    Z <- data[[zvar]]
+    Y <- data[[yvar]]
+    t <- data[[tvar]]
+    function(theta){
+      zhat <- X %*% theta[1:ncol(X)]
+      deltap <- theta[ncol(X)+1]
+      gamma0 <- theta[ncol(X)+2]
+      tau_a0 <- theta[ncol(X)+3]
+      pz <- plogis(zhat)
+      if (zmodel == "probit"){
+        pz <- pnorm(zhat)}
+      pd <- dnorm(zhat)
+      c(eval(eqips), eval(eq_delta), eval(eq_gamma0), eval(eq_tau_a0))
+    }
+  }
+  tau_a0_estimation <- m_estimate(
+    estFUN = tau_a0_condition,
+    data   = data,
+    root_control = setup_root_control(start = c(bips,nums,kappa_0s,late_a0)))
+
+  coef_tau_a0 <- coef(tau_a0_estimation)
+  tau_a0 <- coef_tau_a0[length(coef_tau_a0)]
+  vcov_tau_a0 <- vcov(tau_a0_estimation)
+  var_tau_a0 <- vcov_tau_a0[nrow(vcov_tau_a0),ncol(vcov_tau_a0)]
+  }
+
+  # tau_a10
+  if (zmodel != "cbps"){
+  tau_a10_condition <- function(data){
+    X <- model.matrix(formula_z, data = data)
+    Z <- data[[zvar]]
+    Y <- data[[yvar]]
+    t <- data[[tvar]]
+    function(theta){
+      zhat <- X %*% theta[1:ncol(X)]
+      delta1 <- theta[ncol(X)+1]
+      gamma1 <- theta[ncol(X)+2]
+      delta0 <- theta[ncol(X)+3]
+      gamma0 <- theta[ncol(X)+4]
+      tau_a10 <- theta[ncol(X)+5]
+      pz <- plogis(zhat)
+      if (zmodel == "probit"){
+        pz <- pnorm(zhat)}
+      pd <- dnorm(zhat)
+      c(eval(eqips), eval(eq_delta1),eval(eq_gamma1), eval(eq_delta0), eval(eq_gamma0), eval(eq_tau_a10))
+    }
+  }
+  tau_a10_estimation <- m_estimate(
+    estFUN = tau_a10_condition,
+    data   = data,
+    root_control = setup_root_control(start = c(bips, num1hats, kappa_1s, num0hats, kappa_0s, late_a10)))
+
+  coef_tau_a10 <- coef(tau_a10_estimation)
+  tau_a10 <- coef_tau_a10[length(coef_tau_a10)]
+  vcov_tau_a10 <- vcov(tau_a10_estimation)
+  var_tau_a10 <- vcov_tau_a10[nrow(vcov_tau_a10),ncol(vcov_tau_a10)]
+  }
+  }
+
+  # tau_norm
+  if (bintreat == 0 || (dmeanz0 != 0 && dmeanz0 != 1 && dmeanz1 != 0 && dmeanz1 != 1)) {
+    tau_norm_condition <- function(data){
+      X <- model.matrix(formula_z, data = data)
+      Z <- data[[zvar]]
+      Y <- data[[yvar]]
+      t <- data[[tvar]]
+      function(theta){
+        zhat <- X %*% theta[1:ncol(X)]
+        mu1 <- theta[ncol(X)+1]
+        mu0 <- theta[ncol(X)+2]
+        m1 <- theta[ncol(X)+3]
+        m0 <- theta[ncol(X)+4]
+        tau_norm <- theta[ncol(X)+5]
+        pz <- plogis(zhat)
+        if (zmodel == "probit"){
+          pz <- pnorm(zhat)}
+        pd <- dnorm(zhat)
+        c(eval(eqips), eval(eq_mu1),eval(eq_mu0), eval(eq_m1), eval(eq_m0), eval(eq_tau_norm))
+      }
+    }
+    tau_norm_estimation <- m_estimate(
+      estFUN = tau_norm_condition,
+      data   = data,
+      root_control = setup_root_control(start = c(bips, num1s, num0s, denom1s, denom0s, late_norm)))
+    }
+
+  else if (bintreat == 1 && (dmeanz0 == 0 || dmeanz0 == 1 )){
+    tau_norm_condition <- function(data){
+      X <- model.matrix(formula_z, data = data)
+      Z <- data[[zvar]]
+      Y <- data[[yvar]]
+      t <- data[[tvar]]
+      function(theta){
+        zhat <- X %*% theta[1:ncol(X)]
+        mu1 <- theta[ncol(X)+1]
+        mu0 <- theta[ncol(X)+2]
+        m1 <- theta[ncol(X)+3]
+        tau_norm <- theta[ncol(X)+4]
+        pz <- plogis(zhat)
+        if (zmodel == "probit"){
+          pz <- pnorm(zhat)}
+        pd <- dnorm(zhat)
+        c(eval(eqips), eval(eq_mu1),eval(eq_mu0), eval(eq_m1), eval(eq_tau_norm))
+      }
+    }
+    tau_norm_estimation <- m_estimate(
+      estFUN = tau_norm_condition,
+      data   = data,
+      root_control = setup_root_control(start = c(bips, num1s, num0s, denom1s, late_norm)))
+  }
+
+  else if (bintreat == 1 && (dmeanz1 == 0 || dmeanz1 == 1 )){
+    tau_norm_condition <- function(data){
+      X <- model.matrix(formula_z, data = data)
+      Z <- data[[zvar]]
+      Y <- data[[yvar]]
+      t <- data[[tvar]]
+      function(theta){
+        zhat <- X %*% theta[1:ncol(X)]
+        mu1 <- theta[ncol(X)+1]
+        mu0 <- theta[ncol(X)+2]
+        m0 <- theta[ncol(X)+3]
+        tau_norm <- theta[ncol(X)+4]
+        pz <- plogis(zhat)
+        if (zmodel == "probit"){
+          pz <- pnorm(zhat)}
+        pd <- dnorm(zhat)
+        c(eval(eqips), eval(eq_mu1),eval(eq_mu0), eval(eq_m0), eval(eq_tau_norm))
+      }
+    }
+    tau_norm_estimation <- m_estimate(
+      estFUN = tau_norm_condition,
+      data   = data,
+      root_control = setup_root_control(start = c(bips, num1s, num0s, denom0s, late_norm)))
+  }
+
+  coef_tau_norm <- coef(tau_norm_estimation)
+  tau_norm <- coef_tau_norm[length(coef_tau_norm)]
+  vcov_tau_norm <- vcov(tau_norm_estimation)
+  var_tau_norm <- vcov_tau_norm[nrow(vcov_tau_norm),ncol(vcov_tau_norm)]
+
+  # Results of the LATE Estimation
+  if (bintreat == 0) {
+    b <- matrix(tau_norm, nrow = 1, ncol = 1)
+    V <- matrix(var_tau_norm, nrow = 1, ncol = 1)
+    rownames(b) <- c("")
+    colnames(b) <- c("tau_u")
+    rownames(V) <- colnames(V) <- c("tau_u")
+  }
+  else if (bintreat == 1){
+    if (which == "all") {
+      if (zmodel != "cbps") {
+        b <- matrix(c(tau_a, tau_a1, tau_a0, tau_a10, tau_norm), nrow = 1, ncol = 5)
+        V <- matrix(0, nrow = 5, ncol = 5)
+        diag(V) <- c(var_tau_a, var_tau_a1, var_tau_a0, var_tau_a10, var_tau_norm)
+        rownames(b) <- c("")
+        colnames(b) <- c("tau_a", "tau_a,1", "tau_a,0", "tau_a,10", "tau_u")
+        rownames(V) <- colnames(V) <- c("tau_a", "tau_a,1", "tau_a,0", "tau_a,10", "tau_u")
+        }
+      else if (zmodel == "cbps") {
+        b <- matrix(c(tau_a, tau_norm), nrow = 1, ncol = 2)
+        V <- matrix(0, nrow = 2, ncol = 2)
+        diag(V) <- c(var_tau_a, var_tau_norm)
+        rownames(b) <- c("")
+        colnames(b) <- c("tau_a", "tau_u")
+        rownames(V) <- colnames(V) <- c("tau_a", "tau_u")
+      }
+    }
+    else if (which == "norm") {
+      if (zmodel != "cbps") {
+        b <- matrix(c(tau_a10, tau_norm), nrow = 1, ncol = 2)
+        V <- matrix(0, nrow = 2, ncol = 2)
+        diag(V) <- c(var_tau_a10, var_tau_norm)
+        rownames(b) <- c("")
+        colnames(b) <- c("tau_a,10", "tau_u")
+        rownames(V) <- colnames(V) <- c("tau_a,10", "tau_u")
+      }
+      else if (zmodel == "cbps") {
+        b <- matrix(tau_norm, nrow = 1, ncol = 1)
+        V <- matrix(var_tau_norm, nrow = 1, ncol = 1)
+        rownames(b) <- c("")
+        colnames(b) <- c("tau_u")
+        rownames(V) <- colnames(V) <- c("tau_u")
+      }
+    }
+  }
+
+  cat("\nWeighting estimation of the LATE\n\n")
+  cat("Outcome     : ", yvar, "\n")
+  cat("Treatment   : ", tvar, "\n")
+  cat("Instrument  : ", zvar, "\n")
+  if (zmodel == "logit") {
+    cat("IPS         :   Logit ML\n")
+  } else if (zmodel == "Probit") {
+    cat("IPS         :   probit ML\n")
+  } else if (zmodel == "cbps") {
+    cat("IPS         :   Logit Covariate Balancing\n")
+  }
+  cat("Number of obs.   = ", nrow(data), "\n\n")
+
+  kappalate_results <- list(
+    coefficients = b,
+    vcov_matrix = V,
+    N = nrow(data),
+    metadata = list(
+      title = "LATE estimation",
+      depvar = yvar,
+      tvar = tvar,
+      zvar = zvar,
+      zmodel = zmodel,
+      cmd = "kappalate",
+      formula = given_formula
+    )
+  )
+  cat("Estimated LATE coefficients:\n")
+  print(kappalate_results$coefficients)
+  cat("\n")
+  cat("Estimated Variance matrix:\n")
+  print(kappalate_results$vcov_matrix)
+
+  return(invisible(kappalate_results))
 
 
-logit_model <- glm(z ~ x1 + x2, data = df, family = binomial())
-predictions <- predict(logit_model, type = "response")
-coefslog <- coef(logit_model)
-coefslog
-predictions[1:10]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-kappalate(y ~ x1 + x2 | t | z  , data = df, zmodel = "cbps", std = "off", subset = c(1:1000))
-
-
-set.seed(123)
-n <- 1000
-x1 <- rbinom(n, size = 1, prob = 0.5)
-x2 <- rnorm(n, mean = -1, sd = 1)
-z <- pmax(rbinom(n, size = 1, prob = 0.5)*x1, rbinom(n, size = 1, prob = 0.5))
-u <- rbinom(n, size = 1, prob = 0.5)
-t <- pmax(z,u)
-y <- 1.5 * t + 0.8 * x1 - 0.5 * x2 + u + rnorm(n, mean = 0, sd = 1)
-df <- data.frame(y = y, t = t, z = z, x1 = x1, x2 = x2)
-
-
-cov(y,z)/cov(t,z)
-lm(y ~ x1 + x2:x1 + t, data = df)
-lm(y ~ x1 + x2 + z + t, data = df)
-lm(t ~ x1 + x2 + z, data = df)
-library(ivreg)
-ivreg(y ~ x1 + x2 | t | z , data = df)
-lm(y ~ x1 +x2 +t, data = df)
-
-
-# Need to add a way to add various instruments or only allow single instrument
-# Same for treatment
-# Add further preprocessing using formulas
+  }#Ends the function code
