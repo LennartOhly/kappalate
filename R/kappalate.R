@@ -556,11 +556,11 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
   cat("Treatment   : ", tvar, "\n")
   cat("Instrument  : ", zvar, "\n")
   if (zmodel == "logit") {
-    cat("IPS         :   Logit ML\n")
-  } else if (zmodel == "Probit") {
-    cat("IPS         :   probit ML\n")
+    cat("IPS         :  Logit ML\n")
+  } else if (zmodel == "probit") {
+    cat("IPS         :  Probit ML\n")
   } else if (zmodel == "cbps") {
-    cat("IPS         :   Logit Covariate Balancing\n")
+    cat("IPS         :  Logit Covariate Balancing\n")
   }
   cat("Number of obs.   = ", nrow(data), "\n\n")
 
