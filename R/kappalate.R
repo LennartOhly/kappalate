@@ -123,8 +123,9 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
   }
 
   # We then examine compliance with the instrument.
-  dmeanz1 <- mean(data[data[, zvar] == 1, tvar])
-  dmeanz0 <- mean(data[data[, zvar] == 0, tvar])
+  dmeanz1 <- mean(as.numeric(unlist(data[data[[zvar]] == 1, tvar])), na.rm = TRUE)
+  dmeanz0 <- mean(as.numeric(unlist(data[data[[zvar]] == 0, tvar])), na.rm = TRUE)
+  
 
   if (bintreat == 1) {
     if (dmeanz0 == dmeanz1) {
@@ -551,20 +552,9 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
     }
   }
 
-  cat("\nWeighting estimation of the LATE\n\n")
-  cat("Outcome     : ", yvar, "\n")
-  cat("Treatment   : ", tvar, "\n")
-  cat("Instrument  : ", zvar, "\n")
-  if (zmodel == "logit") {
-    cat("IPS         :  Logit ML\n")
-  } else if (zmodel == "probit") {
-    cat("IPS         :  Probit ML\n")
-  } else if (zmodel == "cbps") {
-    cat("IPS         :  Logit Covariate Balancing\n")
-  }
-  cat("Number of obs.   = ", nrow(data), "\n\n")
 
-  kappalate_results <- list(
+  # Return these variables
+  ret <- list(
     coefficients = b,
     vcov_matrix = V,
     N = nrow(data),
@@ -576,17 +566,12 @@ kappalate <- function(given_formula, data, zmodel = NULL, vce = NULL, std = NULL
       zmodel = zmodel,
       cmd = "kappalate",
       formula = given_formula
-    )
   )
-  cat("Estimated LATE coefficients:\n")
-  print(kappalate_results$coefficients)
-  cat("\n")
-  cat("Estimated Variance matrix:\n")
-  print(kappalate_results$vcov_matrix)
-
-  return(invisible(kappalate_results))
-
-
+  )
+  # Define a new class
+  class(ret) <- "kappalate"
+  # return the list
+  return(ret)
 
 
   }#Ends the function code
