@@ -78,7 +78,7 @@ print.kappalate <- function(x, ...) {
   cat("----------------------------------------------------------------------\n")
   
   for (i in seq_along(coef_names)) {
-    cat(sprintf("%-10s %10.6f %10.6f %6.2f %8.3f %10.6f %10.6f\n",
+    cat(sprintf("%-10s %10.10f %10.10f %6.2f %8.3f %10.10f %10.10f\n",
                 coef_names[i], coef_values[i], std_errors[i],
                 z_values[i], p_values[i], conf_low[i], conf_high[i]))
   }
